@@ -1,0 +1,4 @@
+"Figure_7.m" runs independently.
+
+"phaseDiagram_data_generation.m" generates data for "Figure_8.m"
+"phaseDiagram_data_generation.m" is run on a cluster for hours, results are saved in "phaseDiagram.mat".

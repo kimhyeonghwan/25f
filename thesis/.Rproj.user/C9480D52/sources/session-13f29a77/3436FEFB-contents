@@ -1,0 +1,410 @@
+
+source("C:/Users/haoxing/Desktop/Work/circuit_breaker/Replication package/Empirical Analysis/Initialize.R")
+
+setwd("C:/Users/haoxing/Desktop/Work/circuit_breaker/Replication package/Empirical Analysis/data")
+
+FixingPriceAll <- readRDS("FixData.rds")
+
+FixingPriceAll <- FixingPriceAll %>%
+  mutate(Date = ymd(paste((Year),"-",(Month),"-",(Day), sep =""))) %>%
+  mutate(Date = as.Date(Date)) %>%
+  complete(Date = seq.Date(min(Date), max(Date), by="day")) %>%
+  mutate(Year=year(Date), Month=month(Date), Day=day(Date)) %>%
+  fill(FixPrice)
+
+
+for (y in seq(2013, 2020)){
+
+  if (y %in% seq(2015, 2019)) {
+    
+    Name1 <- paste("Data", y,"_",1,".rds", sep =  "")
+    DataRaw1 <- readRDS(Name1)
+    Name2 <- paste("Data", y, "_",2,".rds", sep =  "")
+    DataRaw2 <- readRDS(Name2)
+     
+    DataRaw <- rbind(DataRaw1, DataRaw2)
+    rm(DataRaw1, DataRaw2)
+    
+  } else{
+    Name <-   paste("Data", y,".rds", sep =  "")
+    DataRaw <- readRDS(Name)
+  }
+  
+  for (m in seq(1,12,1)){
+
+    Data <- DataRaw %>%
+      filter(month(caldate) == m) %>%
+      filter(PRICE <= 6000)
+    
+    
+    ContractData <- Data %>%
+      select(caldate, contract)
+    
+    ContractData <- ContractData %>%
+      mutate(Yr2 = str_sub(as.character(year(caldate)), 3,4)) %>%
+      mutate(Yr2N = str_sub(as.character(year(caldate)+1), 3,4))
+    
+    ContractData <- ContractData %>%
+      mutate(Year = year(caldate))
+    
+    Years <- c(2013:2020)
+    
+    Break <- matrix(as.Date(NA), length(Years), 4)
+    
+    
+    
+    for (j in 1:4){
+      for (i in seq(1,length(Years))) {
+        if (j == 1) {
+          Break[i,j] <- getNthDayOfWeek(third, Fri, Mar, Years[i])
+        }else if (j == 2) {
+          Break[i,j] <- getNthDayOfWeek(third, Fri, Jun, Years[i])
+        }else if (j == 3){
+          Break[i,j] <- getNthDayOfWeek(third, Fri, Sep, Years[i])
+        } else {
+          Break[i,j] <- getNthDayOfWeek(third, Fri, Dec, Years[i])
+        }
+      }
+    }
+    
+    BreakData <- as_tibble(Years,row = length(Years))
+    
+    
+    BreakData[,"Break1"] <- as.Date(Break[,1])
+    BreakData[,"Break2"] <- as.Date(Break[,2])
+    BreakData[,"Break3"] <- as.Date(Break[,3])
+    BreakData[,"Break4"] <- as.Date(Break[,4])
+    
+    names(BreakData)[1] <- "Year"
+    
+    CD <- ContractData %>%
+      left_join(BreakData, by = "Year")
+    
+    rm(ContractData)
+    
+    CD1 <- CD %>%
+      mutate(Break = case_when(caldate < Break1 ~ as.numeric(paste(Yr2,"03", sep = "")),
+                               caldate < Break2 ~ as.numeric(paste(Yr2,"06", sep = "")),
+                               caldate < Break3 ~ as.numeric(paste(Yr2,"09", sep = "")),
+                               caldate < Break4 ~ as.numeric(paste(Yr2,"12", sep = "")),
+                               TRUE  ~ as.numeric(paste(Yr2N,"03", sep = ""))))
+    
+    
+    rm(CD)
+    CD1 <- CD1 %>% 
+      select(caldate, Break) %>% 
+      distinct()
+    
+    
+    
+    
+    # Make day and year indicators
+    Data <- Data %>%
+      mutate(Day = day(caldate),
+             Year = year(caldate),
+             Month = month(caldate)) %>%
+      left_join(CD1, by = "caldate") %>%
+      filter(contract == Break) %>%
+      select(-c(caldate, contract, Break))
+    
+    rm(CD1)
+    
+    
+    # Make separate variables for hour, minute, etc
+    Data <- Data %>% 
+      mutate(Hour = hour(time),
+             Min = minute(time),
+             Sec = second(time))
+    
+    # Get volume and trade-weighted price
+    Data <- Data %>% 
+      group_by(Year,Month, Day, Hour, Min, Sec) %>%
+      mutate(Volume = sum(SIZE),
+             Price = weighted.mean(PRICE, SIZE)) %>%
+      ungroup() %>%
+      select(-c(SIZE,PRICE)) %>%
+      group_by(Year, Month,Day, Hour, Min, Sec) %>%
+      slice(1) %>%
+      ungroup() 
+    
+    # # Make minute level time
+    Data <- Data %>%
+      mutate(TimeMin = as_hms(paste(Hour,":",Min,":00", sep ="")))
+    # 
+    # # Define breaks
+    Data <- Data %>%
+      mutate(Break =  case_when(Month == 3 & Year == 2020 & Day == 9 ~ as_hms("08:35:13"),
+                                Month == 3 & Year == 2020 & Day == 12 ~ as_hms("08:36:40"),
+                                Month == 3 & Year == 2020 & Day == 16 ~ as_hms("08:30:52"),
+                                Month == 3 & Year == 2020 & Day == 18 ~ as_hms("11:57:39"),
+                                TRUE ~ as_hms(NA)))
+    # 
+    # # # Find the minute during which the break occurs
+    if (m == 3 & y == 2020){
+      DB <- Data %>%
+        filter(!is.na(Break)) %>%
+        mutate(HourB = hour(Break),
+               MinB = minute(Break)
+        ) %>%
+        mutate(BreakMin = case_when(!is.na(Break) ~ as_hms(paste(HourB,":",MinB,":00", sep ="")),
+                                    TRUE ~ as_hms(NA))) %>%
+        select(Year, Day, Month, time, BreakMin)
+      
+      Data <- Data %>%
+        left_join(DB)
+      
+      rm(DB)
+    }else{
+      # Add na for non break days
+      Data <- Data %>%
+        mutate(BreakMin = as_hms(NA))
+    }
+    
+
+    # Append to main data
+    Data <- Data %>% 
+      left_join(FixingPriceAll, c("Day", "Year", "Month")) %>%
+      select(-Date)
+    
+    
+    if ((y != 2013) | (m != 1)) {
+      LastDate <- LastDate[,names(LastDate) %in% names(Data)]
+      Data <- rbind(LastDate,Data)
+    }
+    
+    
+    # Fill backwards in case of missing prices etc (weekends, for example)
+    #Data <- Data %>%
+    #  arrange(Year, Month, Day, Hour, Min, Sec) %>%
+    #  fill(FixPrice)
+    
+    # LastDate is final row
+    LastDate <- Data[dim(Data)[1], ]
+    # Drop appended LastDate
+    Data <- Data[-1,]
+    
+    Data <- Data %>%
+      mutate(TimeMin = as_hms(paste(Hour,":",Min,":00", sep = ""))) 
+    
+    # Find when market opens after break
+    if (m == 3 & y == 2020){
+      Data <- Data %>%
+        mutate(Pre = case_when(Day %in% c(9, 12, 16, 18) & (TimeMin <= BreakMin) & Year == 2020 & Month == 3 ~ 1,
+                               Day %in% c(9, 12, 16, 18) & (TimeMin > BreakMin) & Year == 2020 & Month == 3 ~ 0,
+                               TRUE ~ as.numeric(NA)))
+      
+    }
+    
+    
+    # Filter market open
+    Data <- Data %>%
+      filter(time >= as_hms("08:30:00"),
+             time < as_hms("15:00:00"))
+    
+    # Make return
+    Data <- Data %>%
+      group_by(Year, Month, Day) %>%
+      arrange(Year, Month, Day, time) %>%
+      mutate(Ret = (log(Price) - log(dplyr::lag(Price)))) %>%
+      ungroup() 
+    
+    # Pre-averaged return
+    #Data <- Data %>%
+    #  group_by(Year, Month, Day) %>%
+    #  arrange(Year, Month, Day, time) %>%
+    #  mutate(Ave_Ret = 1/5*(log(dplyr::lead(Price,4)) + log(dplyr::lead(Price,5)) + log(dplyr::lead(Price,6)) + log(dplyr::lead(Price,7)) + log(dplyr::lead(Price,8)))
+    #                  -1/5*(log(dplyr::lag(Price,1)) + log(Price) + log(dplyr::lead(Price,1)) + log(dplyr::lead(Price,2)) + log(dplyr::lead(Price,3)))) %>%
+    #  ungroup()
+    
+    # remove the return at the market open after circuit breaker
+    if (m == 3 & y == 2020){
+      Data <- Data %>%
+        mutate(Ret = case_when((Pre == 0) & (dplyr::lag(Pre) == 1) ~ as.numeric(NA),
+                               TRUE ~ Ret)) #%>%
+        #mutate(Ave_Ret = case_when((Pre == 0) & (dplyr::lag(Pre) == 1) ~ as.numeric(NA),
+        #                       TRUE ~ Ave_Ret))
+    }
+    
+    #k <- 10
+    #psi2 <- 1/3
+    #psi3 <- 1/4
+    
+    # compute variance measures 
+    Data1 <- Data %>%
+      group_by(Year, Month, Day) %>%
+      arrange(Year, Month, Day, time) %>%
+      mutate(LagR = dplyr::lag(Ret)) %>%
+      ungroup() %>%
+      group_by(Year, Month, Day, Hour, Min) %>%
+      arrange(Year, Month, Day, Hour, time) %>%
+      summarize(TV = sum(Ret ^ 2, na.rm = TRUE),
+                #pave_TV =  1/(psi2*k) * sum(Ave_Ret^2, na.rm = TRUE), 
+                PriceM = min(Price),
+                VolumeM = sum(Volume, na.rm = T),
+                Trades_sec = n(),
+                FixPrice = mean(FixPrice, na.rm = T),
+                BreakMin =first(BreakMin),
+                Skew = skewness(Ret, na.rm = T),
+                Skew_ACJV = skew_ACJV(Ret, n()),
+                #Skew_pave = (1/(psi3*k) * sum(Ave_Ret^3, na.rm = TRUE)) / (pave_TV^(3/2)),
+                Ret = sum(log(Price) - dplyr::lag(log(Price)),na.rm = T), .groups = "keep"
+      ) %>%
+      ungroup()
+    
+    # Compute autocorrelation in returns
+    DataRetA <- Data %>%
+      select(Year, Month, Day, Min, Hour, time, Ret) %>%
+      arrange(Year, Month, Day,time) %>%
+      
+      group_by(Year, Month, Day, Hour, Min) %>%
+      mutate(LagR = dplyr::lag(Ret)) %>%
+      summarize(ML = mean(LagR, na.rm = T),
+                M = mean(Ret, na.rm = T),
+                LR = mean(Ret * LagR, na.rm = T),
+                SDL = sd(LagR, na.rm = T),
+                SD = sd(Ret, na.rm = T), .groups = "keep") %>%
+      ungroup() %>%
+      mutate(Auto = (LR - M * ML) / (SDL * SD)) %>%
+      select(Year, Month, Day, Hour, Min, Auto) 
+    
+    
+    Data1 <- Data1 %>%
+      left_join(DataRetA, by = c("Year", "Month", "Day", "Hour", "Min"))
+    
+    
+    # Calculate TSRV with 5 sec or 10 sec subsampling
+    
+    int = 5 # subsample length in seconds
+    
+    Data1 <- Data1 %>%
+      mutate(AveTV = 0)
+    
+    for (i in 0:(int-1)){
+      Data_SubSam <- Data %>%
+        mutate(SubSam = (Sec-i) %/% int) %>%
+        filter(SubSam >= 0, SubSam < (60-int) %/% int) 
+      
+      Data_SubSam <- Data_SubSam %>%
+        group_by(Year, Month, Day, Hour, Min, SubSam) %>%
+        arrange(time) %>%
+        summarize(SubSamRet = sum(Ret,na.rm = T), .groups = "keep") %>%
+        ungroup()
+      
+      Data_SubSam <- Data_SubSam %>%
+        group_by(Year, Month, Day, Hour, Min) %>%
+        summarize(SubSamTV = sum(SubSamRet ^ 2, na.rm = TRUE), .groups = "keep") %>%
+        ungroup()
+      
+      Data1 <- Data1 %>%
+        left_join(Data_SubSam, by = c("Year", "Month", "Day", "Hour", "Min")) %>%
+        mutate(AveTV = AveTV + SubSamTV) %>%
+        select(-SubSamTV)
+      
+      rm(Data_SubSam)
+    }  
+    
+    adj = ((60-int) %/% int)/60
+    adj1 = 1-adj
+    
+    # calculate average total variance among all subsamples, then AdjTV is the two-scale estimator
+    Data1 <- Data1 %>%
+      mutate(AveTV = AveTV/int) %>%
+      mutate(AdjTV_5S = (AveTV - adj*TV)/adj1) %>%
+      mutate(AdjTV_5S = 100 * sqrt(pmax(AdjTV_5S,0))) 
+    
+    int = 10 # subsample length in seconds
+    
+    Data1 <- Data1 %>%
+      mutate(AveTV = 0)
+    
+    for (i in 0:(int-1)){
+      Data_SubSam <- Data %>%
+        mutate(SubSam = (Sec-i) %/% int) %>%
+        filter(SubSam >= 0, SubSam < (60-int) %/% int) 
+      
+      Data_SubSam <- Data_SubSam %>%
+        group_by(Year, Month, Day, Hour, Min, SubSam) %>%
+        arrange(time) %>%
+        summarize(SubSamRet = sum(Ret,na.rm = T), .groups = "keep") %>%
+        ungroup()
+      
+      Data_SubSam <- Data_SubSam %>%
+        group_by(Year, Month, Day, Hour, Min) %>%
+        summarize(SubSamTV = sum(SubSamRet ^ 2, na.rm = TRUE), .groups = "keep") %>%
+        ungroup()
+      
+      Data1 <- Data1 %>%
+        left_join(Data_SubSam, by = c("Year", "Month", "Day", "Hour", "Min")) %>%
+        mutate(AveTV = AveTV + SubSamTV) %>%
+        select(-SubSamTV)
+      
+      rm(Data_SubSam)
+    }  
+    
+    adj = ((60-int) %/% int)/60
+    adj1 = 1-adj
+    
+    # calculate average total variance among all subsamples, then AdjTV is the two-scale estimator
+    Data1 <- Data1 %>%
+      mutate(AveTV = AveTV/int) %>%
+      mutate(AdjTV_10S = (AveTV - adj*TV)/adj1) %>%
+      mutate(AdjTV_10S = 100 * sqrt(pmax(AdjTV_10S,0))) 
+    
+    Data1 <- Data1 %>%
+      mutate(TV = 100*sqrt(TV)) #%>%
+      #mutate(pave_TV = 100*sqrt(pave_TV))
+    
+    
+    
+    # Price diff
+    Data1 <- Data1 %>%
+      mutate(PDiff = (PriceM - 0.93 * FixPrice) / FixPrice) %>% 
+      drop_na(PDiff)
+    
+    # Keep only minute level obs
+    DataReg <- Data1 %>%
+      mutate(TimeMin = as_hms(paste(Hour,":",Min,":00", sep = ""))) %>%
+      select(TimeMin, Year, Month, Day, PriceM, VolumeM, Trades_sec, Ret, TV, AdjTV_5S, AdjTV_10S, PDiff, BreakMin, FixPrice, Skew, Skew_ACJV, Auto) %>% 
+      distinct() 
+    
+    rm(Data1)
+    # 
+    # # Define indicator for pre-break
+    DataReg <- DataReg %>%
+      mutate(Pre = case_when(Day %in% c(9, 12, 16, 18) & (TimeMin < BreakMin) & Year == 2020 & Month == 3 ~ 1,
+                             Day %in% c(9, 12, 16, 18) & (TimeMin >= BreakMin) & Year == 2020 & Month == 3 ~ 0,
+                             TRUE ~ as.numeric(NA)))
+    
+    # If after break on break day, define 13% distance as well
+    DataReg <- DataReg %>%
+      mutate(PDiff = case_when(Pre == 0 ~ (PriceM - 0.87 * FixPrice) / FixPrice,
+                               TRUE ~ PDiff)) %>%
+      drop_na(PDiff)
+    
+    
+    # # Define indicator for pre 3:25pm ET
+    DataReg <- DataReg %>%
+      mutate(Pre325 = case_when(TimeMin < as_hms("14:25:00") ~ 1,
+                                TimeMin >= as_hms("14:25:00") ~ 0))
+    
+    # After 3:25pm, only 20% threshold is active
+    DataReg <- DataReg %>%
+      mutate(PDiff = case_when(Pre325 == 0 ~ (PriceM - 0.8 * FixPrice) / FixPrice,
+                               TRUE ~ PDiff)) %>%
+      drop_na(PDiff)
+    
+    DataReg <- DataReg %>% 
+      mutate(DateFac = interaction(Month,Day),
+             TimeFac = as_factor(as.character(TimeMin)))
+    
+    NameNew <- paste("DataReg", y, m, "New.rds", sep = "")
+    
+    print(y)
+    print(m)
+    
+    saveRDS(DataReg,NameNew)
+    rm(DataReg, Data,DataRetA)
+  }
+  rm(DataRaw)
+}
+

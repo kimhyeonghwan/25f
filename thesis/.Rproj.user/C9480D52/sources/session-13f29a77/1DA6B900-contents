@@ -1,0 +1,106 @@
+# Clear workspace
+rm(list = ls())
+
+library(tidyverse)  # main package for data manipulation
+library(lubridate)  # for working with dates
+library(xtable)
+library(stargazer)
+library(gridExtra)
+library(lfe)
+library(roll)
+library(zoo)
+library(rlang)
+library(lmtest)
+library(sandwich)
+library(broom)
+library(hms)
+library(RcppBDT)
+library(plm)
+library(e1071)
+library(KernSmooth)
+library(pracma)
+library(lokern)
+library(robustHD)
+library(fixest)
+library(ggpubr)
+library(vars)
+library(forecast)
+library(aTSA)
+library(TSA)
+#library(DescTools)
+#library(VGAMextra)
+
+
+# Winsorize function
+winsorize <- function(x, cut){
+  cut_point_top <- quantile(x, 1 - cut, na.rm = TRUE)
+  cut_point_bottom <- quantile(x, cut, na.rm = TRUE)
+  i <- which(x >= cut_point_top) 
+  x[i] <- cut_point_top
+  j <- which(x <= cut_point_bottom) 
+  x[j] <- cut_point_bottom
+  return(x)
+}
+
+skew_ACJV <- function(x, n){
+  m2 <- sum(x ^ 2, na.rm = TRUE)
+  m3 <- sum(x ^ 3, na.rm = TRUE)
+  skew_ACJV <- sqrt(n) * m3/(m2^(3/2))
+  return(skew_ACJV)
+}
+
+g <- function(p){
+  return(2*p*(1-p))
+}
+
+
+# Weighted mean with na.rm
+weighted_mean <-function(x, w, ..., na.rm = FALSE){
+  # If exclude na
+  if(na.rm){
+    # New x has non-missing obs and weights
+    x1 <- x[!is.na(x) & !is.na(w)]
+    # Same for new weights
+    w <- w[!is.na(x) & !is.na(w)]
+    # Rename old x
+    x <- x1
+  }
+  # Do actual weighted mean function
+  weighted.mean(x, w, ..., na.rm = FALSE)
+}
+
+# Portolio assignment from list of breakpoints
+
+get_portfolio <- function(x, breakpoints) {
+  portfolio <- as.integer(1 + findInterval(x, unlist(breakpoints)))
+  return(portfolio)
+}
+
+scale2 <- function(x, na.rm = T) (x - mean(x, na.rm = na.rm)) / sd(x, na.rm)
+
+Stan <- function(Vars, df){
+  Data_Ann_st <- df %>%
+    mutate_at(Vars, scale2) %>%
+    select(!!!syms(Vars))
+  
+  df[,paste(Vars, "_st", sep = "")] <- Data_Ann_st
+  return(df)
+}
+
+StanCross <- function(Vars, Var2,df){
+  Data_Ann_st <- df %>%
+    group_by(!!sym(Var2)) %>%
+    mutate_at(Vars, scale2) %>%
+    ungroup() %>%
+    select(!!!syms(Vars))
+  
+  df[,paste(Vars, "_stc", sep = "")] <- Data_Ann_st
+  return(df)
+}
+
+
+
+
+select <- dplyr::select
+memory.limit(size=100000)
+

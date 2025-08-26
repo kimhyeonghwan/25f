@@ -1,0 +1,3 @@
+FixingPriceAll <- readRDS("Replication package/Empirical Analysis/data/FixData.rds")
+
+

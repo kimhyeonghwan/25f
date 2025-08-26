@@ -1,0 +1,3 @@
+1. run "Figure_3_generate_solution_for_MC.m".
+2. run "Figure_3_PanelA_CB", "Figure_3_PanelA_CM", "Figure_3_PanelC_CB", and "Figure_3_PanelC_CM" on clusters. They took hours to a day, particularly the last two scripts. Results are saved in 4 data files.
+3. run "Figure_3_plot.m" to plot the final figure. 
