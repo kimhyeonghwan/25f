@@ -1,59 +1,31 @@
-# running Global setting
-source("1.setting.R")
+rm(list=ls())
 
-# set parameter
-master_strt <- 2014
-master_end <- 2023
-target_strt <- 20140101
-target_end <- 20231231
+# Set local environment
+setwd("/Users/hwan/KAIST/25fall/thesis/data")
+o <- odbcConnect(dsn = "oracle", uid = "USFO_INF", pwd = "vkfksgksmf03!",
+                 believeNRows = FALSE, DBMSencoding = "")
 
-# daily data
-master <- tibble()
-for(i in master_strt:master_end){
-  tmp <- read_csv(gzfile(paste0("data/DRV_Master/",i,"_Futures_Master.csv.gz"))) %>%
-    tibble() %>% 
-    filter(PROD_ID %in% c("KRDRVFUK2I","KRDRVFUKQI"),
-           EXPMM_NO<=2, substr(ISU_CD,4,4)==1)
-  master <- master %>% bind_rows(tmp)
-}
-rm(tmp)
+# Import library
+library(tidyverse)
+library(data.table)
+library(e1071)
+library(RODBC)
 
-# expiry day & (T-1) day
-lsttrd_dd <- master %>% 
-  mutate(TRD_MM=TRD_DD %/% 100) %>% 
-  filter(PROD_ID=="KRDRVFUK2I", EXPMM_NO==1, as.integer(substr(TRD_MM,5,6)) %% 3==0) %>% 
-  select(TRD_MM, TRD_DD,remain_dys) %>% 
-  arrange(TRD_MM, remain_dys) %>% 
-  group_by(TRD_MM) %>% 
-  slice(1:2) %>% 
-  ungroup() %>% 
-  select(TRD_DD)
+# Import csv
+start_date <- 20150501
+end_date <- 20181231
 
-master_lead <- master %>% filter(EXPMM_NO==1)
-master_second <- master %>% filter(EXPMM_NO==2)
-
-lsttrd_second <- lsttrd_dd %>% left_join(master_second)
-
-# target is lead month + second month(ONLY expiry day)
-target_isu <- master_lead %>%
-  union_all(lsttrd_second) %>% 
-  filter(TRD_DD>=target_strt,
-         TRD_DD<=target_end) %>% 
-  select(TRD_DD,PROD_ID,ISU_CD,TDD_CLSPRC,ACC_TRDVOL,ACC_TRDVAL,EXPMM_NO,EXPMM,remain_dys) %>% 
-  arrange(TRD_DD,PROD_ID,EXPMM_NO)
-# fwrite(target_isu %>% data.table(), "data/target_isu.csv.gz", compress = "gzip")
-
+target_isu <- read_csv("target_isu.csv.gz") %>% 
+  filter(TRD_DD>=start_date, TRD_DD<=end_date)
 target_isu_wide <- target_isu %>%
   select(TRD_DD,PROD_ID,EXPMM_NO,ISU_CD) %>% 
   pivot_wider(names_from = c("PROD_ID","EXPMM_NO"), values_from = "ISU_CD")
-
 
 year_first_day <- target_isu_wide %>% 
   mutate(TRD_YY=substr(TRD_DD,1,4)) %>% 
   group_by(TRD_YY) %>% 
   slice(1) %>% 
   ungroup() %>% 
-  filter(substr(TRD_DD,5,6)=='01') %>% 
   select(TRD_DD)
 
 # CB history : remove sec-return after CB triggered
@@ -77,21 +49,21 @@ result_min <- list()
 result_close <- list()
 loop_i <- 1
 
-for(i in which(target_isu_wide$TRD_DD==20190102):NROW(target_isu_wide)){
+for(i in 1:NROW(target_isu_wide)){
   day <- target_isu_wide$TRD_DD[i]
   isu <- c(target_isu_wide$KRDRVFUK2I_1[i],target_isu_wide$KRDRVFUKQI_1[i],
            target_isu_wide$KRDRVFUK2I_2[i],target_isu_wide$KRDRVFUKQI_2[i])
   
   # transaction level data to second level data
-  tmp_second <- read_csv(gzfile(paste0("data/DRV_TRD/",day,"_DRV_TRD.csv.gz")),
-                         show_col_types = FALSE,
-                         col_select = c("TRD_TM","ISU_CD","TRD_PRC","TRDVOL","BRD_ID","SESS_ID","TRD_DD","TRD_NO"),
-                         col_types = cols(TRD_DD  = col_integer(),ISU_CD  = col_character(),
-                                          TRD_TM  = col_integer(),TRD_PRC = col_double(),
-                                          TRDVOL  = col_double(),BRD_ID  = col_character(),
-                                          SESS_ID = col_integer(),TRD_NO  = col_integer())) %>%
+  tmp_second <- sqlQuery(o,paste0("SELECT TRD_DD, TRD_TM, ISU_CD, TRD_PRC, TRDVOL, TRD_NO",
+                                  " FROM VWSV_DRV_TRD3",
+                                  " WHERE trd_dd='",day,"'",
+                                  " AND BRD_ID='G1' AND SESS_ID='40'")) %>%
+    tibble() %>% 
+    mutate(across(c(TRD_DD, TRD_TM, TRD_NO), as.integer),
+           across(c(TRD_PRC, TRDVOL), as.double),
+           ISU_CD=as.character(ISU_CD)) %>% 
     filter(ISU_CD %in% isu) %>%
-    filter(BRD_ID=="G1", SESS_ID==40) %>% # Regulat trading hour & Continuous trading
     mutate(T_min=TRD_TM %/% 100000,
            T_sec=TRD_TM %/% 1000) %>%
     arrange(TRD_DD,ISU_CD,TRD_NO) %>%
@@ -105,7 +77,7 @@ for(i in which(target_isu_wide$TRD_DD==20190102):NROW(target_isu_wide)){
     tmp_second <- tmp_second %>% mutate(day_grp=1)
   }else if(max(tmp_second$T_min)>1600){
     tmp_second <- tmp_second %>% mutate(day_grp=2,
-                                    T_min=T_min-100, T_sec=T_sec-10000)
+                                        T_min=T_min-100, T_sec=T_sec-10000)
   }else{tmp_second <- tmp_second %>% mutate(day_grp=0)}
   
   tmp_second <- tmp_second %>% 
@@ -221,7 +193,5 @@ for(i in which(target_isu_wide$TRD_DD==20190102):NROW(target_isu_wide)){
 data_min <- bind_rows(result_min)
 data_close <- bind_rows(result_close)
 
-fwrite(data_min %>% data.table(),"data/data_min2.csv.gz", compress = "gzip")
-fwrite(data_close %>% data.table(),"data/data_close2.csv.gz", compress = "gzip")
-
-# 20210223, 20230825 error day
+fwrite(data_min %>% data.table(),"request_min.csv.gz", compress = "gzip")
+fwrite(data_close %>% data.table(),"request_close.csv.gz", compress = "gzip")
